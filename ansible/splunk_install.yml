@@ -1,0 +1,83 @@
+---
+- name: Install and configure Splunk 9.4.3 on Linux
+  hosts: splunk_servers
+  become: true #install as root
+
+  vars:
+    splunk_url: "https://download.splunk.com/products/splunk/releases/9.4.3/linux/splunk-9.4.3-237ebbd22314.x86_64.rpm"
+    splunk_rpm: "/opt/splunk.rpm"
+    splunk_admin_user: admin
+    splunk_admin_pass: admin123
+
+  tasks:
+    - name: Update all packages
+      ansible.builtin.dnf:
+        name: "*"
+        state: latest
+        update_cache: yes
+
+    - name: Install wget
+      ansible.builtin.dnf:
+        name: wget
+        state: present
+
+    - name: Download Splunk RPM
+      ansible.builtin.get_url:
+        url: "{{ splunk_url }}"
+        dest: "{{ splunk_rpm }}"
+        mode: "0644"
+
+    - name: Install Splunk using rpm command (fallback)
+      ansible.builtin.command: rpm -i {{ splunk_rpm }}
+      args:
+        creates: /opt/splunk/bin/splunk
+
+    - name: Ensure Splunk admin user config directory exists
+      ansible.builtin.file:
+        path: /opt/splunk/etc/system/local
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Configure initial Splunk admin user
+      ansible.builtin.copy:
+        dest: /opt/splunk/etc/system/local/user-seed.conf
+        content: |
+          [user_info]
+          USERNAME = {{ splunk_admin_user }}
+          PASSWORD = {{ splunk_admin_pass }}
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Install chkconfig (needed for Splunk boot-start)
+      ansible.builtin.dnf:
+        name: chkconfig
+        state: present
+
+    - name: Enable Splunk at startup
+      ansible.builtin.command: /opt/splunk/bin/splunk enable boot-start --accept-license --answer-yes --no-prompt
+      args:
+        creates: /etc/systemd/system/splunkd.service
+
+    # 🔥 FIXED START (non-blocking + reliable)
+    - name: Start Splunk (background)
+      ansible.builtin.command: /opt/splunk/bin/splunk start --accept-license --answer-yes --no-prompt
+      async: 300
+      poll: 10
+
+    # 🔥 WAIT until port 8000 is ready
+    - name: Wait for Splunk Web to be available
+      ansible.builtin.wait_for:
+        port: 8000
+        delay: 10
+        timeout: 300
+
+    - name: Show Splunk Web info
+      ansible.builtin.debug:
+        msg: |
+          🚀 Splunk is installed and started!
+          Access it at: http://{{ ansible_host }}:8000
+          Username: {{ splunk_admin_user }}
+          Password: {{ splunk_admin_pass }}
